@@ -1,18 +1,13 @@
 from fastapi import APIRouter, HTTPException, Depends
-from app.schemas.item import ItemResponse
 from app.schemas.artist import ArtistResponse
 from app.schemas.song import SongResponse
 from app.schemas.song_with_artist import SongWithArtistResponse
-from app.schemas.rating import RatingResponse
-from app.schemas.recommendation import PlaylistRequest, RecommendationsListResponse, RecommendationResponse
 from app.models.artist import Artist
 from app.models.song import Song
-from app.models.rating import Rating
 from app.core.database import get_db
 from app.services.recommendation import RecommendationService
 from sqlalchemy.orm import Session
-from sqlalchemy import text
-from typing import List, Dict
+from typing import List
 
 router = APIRouter()
 recommendationService = RecommendationService()

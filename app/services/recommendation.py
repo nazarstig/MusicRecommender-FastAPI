@@ -1,16 +1,10 @@
-from fastapi.params import Depends
 import numpy as np
 import pandas as pd
-from sklearn.decomposition import TruncatedSVD
-from sklearn.metrics.pairwise import cosine_similarity
 from sqlalchemy.orm import Session
-from app.core.database import get_db
 from app.models.rating import Rating
-from app.models.song import Song
 from typing import List, Dict
 from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import svds
-
 
 class RecommendationService:
     def __init__(self):
