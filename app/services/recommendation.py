@@ -9,10 +9,12 @@ from scipy.sparse.linalg import svds
 class RecommendationService:
     def __init__(self):
         self.predictions_df = None
+        self.V = None
+        self.Sigma = None
     
     @staticmethod
     def get_ratings(db: Session) -> List[Rating]:
-        ratings = db.query(Rating).limit(1000000).all()
+        ratings = db.query(Rating).limit(10000000).all()
         return ratings
     
     @staticmethod
@@ -28,6 +30,9 @@ class RecommendationService:
         sparse_matrix = csr_matrix(user_item_matrix.values)
         u, s, vt = svds(sparse_matrix, k=50)
         sigma = np.diag(s)
+
+        self.V = vt.T
+        self.Sigma = sigma
 
         all_user_predicted_ratings = np.dot(np.dot(u, sigma), vt)
         self.predictions_df = pd.DataFrame(all_user_predicted_ratings, 
@@ -45,6 +50,26 @@ class RecommendationService:
         recommendations = [song for song in user_predictions.index if song not in user_rated_songs]
         
         return [{"TrackId": track_id, "PredictedRating": float(user_predictions[track_id])} 
+                for track_id in recommendations[:num_recommendations]]
+    
+    def get_recommended_songs_from_input(self, db: Session, input_songs: List[str], num_recommendations: int = 5) -> List[Dict]:
+        if self.predictions_df is None:
+            raise ValueError("Predictions not created yet. Call create_recommendations() first.")
+        
+        input_songs = set(input_songs)
+        # add validation to ensure input songs are in the dataset
+        valid_input_songs = input_songs.intersection(set(self.predictions_df.columns))
+         
+        r_new = np.zeros(self.predictions_df.shape[1])
+        for song in valid_input_songs:
+            r_new[self.predictions_df.columns.get_loc(song)] = 20.0
+        r_new = r_new.reshape(1, -1)
+        u_new = np.dot(r_new, np.dot(self.V, np.linalg.inv(self.Sigma)))
+        r = np.dot(u_new, np.dot(self.Sigma, self.V.T))
+        song_scores = pd.Series(r.flatten(), index=self.predictions_df.columns).sort_values(ascending=False)
+        recommendations = [song for song in song_scores.index if song not in input_songs]
+        
+        return [{"TrackId": track_id, "PredictedRating": float(song_scores[track_id])} 
                 for track_id in recommendations[:num_recommendations]]
     
     def get_already_rated_songs(self, db: Session, user_id: str) -> List[str]:

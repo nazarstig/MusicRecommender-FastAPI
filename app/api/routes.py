@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends
 from app.schemas.artist import ArtistResponse
+from app.schemas.recommendation import PlaylistRequest
 from app.schemas.song import SongResponse
 from app.schemas.song_with_artist import SongWithArtistResponse
 from app.models.artist import Artist
@@ -59,3 +60,38 @@ async def create_recommendations(db: Session = Depends(get_db)):
     recommendationService.create_recommendations(ratings)
     
     return None
+
+@router.post(
+    "/recommendations",
+    response_model=List[SongWithArtistResponse],
+    responses={400: {"description": "Invalid recommendation input"}}
+)
+async def get_recommendations_for_tracks(payload: PlaylistRequest, db: Session = Depends(get_db)):
+    try:
+        recommendations = recommendationService.get_recommended_songs_from_input(db, payload.track_ids, 10)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
+    track_ids = [rec["TrackId"] for rec in recommendations]
+
+    songs_with_artists = (
+        db.query(
+            Artist.ArtistName,
+            Artist.ArtistId,
+            Song.TrackId,
+            Song.TrackName
+        )
+        .join(Song, Artist.ArtistId == Song.ArtistId)
+        .filter(Song.TrackId.in_(track_ids))
+        .all()
+    )
+
+    return [
+        {
+            "ArtistName": row.ArtistName,
+            "ArtistId": row.ArtistId,
+            "TrackId": row.TrackId,
+            "TrackName": row.TrackName
+        }
+        for row in songs_with_artists
+    ]
