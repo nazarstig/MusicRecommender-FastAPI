@@ -12,23 +12,23 @@ class RecommendationService:
         self.V = None
         self.Sigma = None
     
-    @staticmethod
-    def get_ratings(db: Session) -> List[Rating]:
-        ratings = db.query(Rating).limit(10000000).all()
+    def get_ratings(self, db: Session) -> List[Rating]:
+        ratings = db.query(Rating).all()
+       
         return ratings
     
-    @staticmethod
-    def create_user_item_matrix(ratings: List[Rating]) -> pd.DataFrame:
+    def create_user_item_matrix(self, db: Session) -> pd.DataFrame:
+        ratings = self.get_ratings(db)
         data = [{'UserId': r.UserId, 'TrackId': r.TrackId, 'Rating': r.Rating} for r in ratings]    
         df = pd.DataFrame(data)
         matrix = df.pivot_table(index='UserId', columns='TrackId', values='Rating', fill_value=0)
         
         return matrix
     
-    def create_recommendations(self, ratings: List[Rating]):
-        user_item_matrix = RecommendationService.create_user_item_matrix(ratings)
+    def create_recommendations(self, db: Session):
+        user_item_matrix = self.create_user_item_matrix(db)
         sparse_matrix = csr_matrix(user_item_matrix.values)
-        u, s, vt = svds(sparse_matrix, k=50)
+        u, s, vt = svds(sparse_matrix, k=100)
         sigma = np.diag(s)
 
         self.V = vt.T
@@ -52,17 +52,17 @@ class RecommendationService:
         return [{"TrackId": track_id, "PredictedRating": float(user_predictions[track_id])} 
                 for track_id in recommendations[:num_recommendations]]
     
-    def get_recommended_songs_from_input(self, db: Session, input_songs: List[str], num_recommendations: int = 5) -> List[Dict]:
+    def get_recommended_songs_from_input(self, input_songs: List[str], num_recommendations: int = 5) -> List[Dict]:
         if self.predictions_df is None:
             raise ValueError("Predictions not created yet. Call create_recommendations() first.")
         
         input_songs = set(input_songs)
-        # add validation to ensure input songs are in the dataset
+        # validation to ensure input songs are in the dataset
         valid_input_songs = input_songs.intersection(set(self.predictions_df.columns))
          
         r_new = np.zeros(self.predictions_df.shape[1])
         for song in valid_input_songs:
-            r_new[self.predictions_df.columns.get_loc(song)] = 20.0
+            r_new[self.predictions_df.columns.get_loc(song)] = 50.0
         r_new = r_new.reshape(1, -1)
         u_new = np.dot(r_new, np.dot(self.V, np.linalg.inv(self.Sigma)))
         r = np.dot(u_new, np.dot(self.Sigma, self.V.T))

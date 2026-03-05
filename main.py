@@ -2,7 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api import routes
 from app.core.config import settings
-from app.core.database import engine
+from app.core.database import engine, SessionLocal
+from app.core.dependancies import get_recommendation_service
 from app.models import item
 from sqlalchemy import text
 
@@ -27,11 +28,19 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup_event():
-    """Test database connection on startup"""
+    """Test DB connection and warm up recommendation matrices on startup."""
     try:
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
             print("✓ Database connection successful!")
+
+        db = SessionLocal()
+        try:
+            recommendation_service = get_recommendation_service()
+            recommendation_service.create_recommendations(db)
+            print("✓ Recommendation matrices initialized")
+        finally:
+            db.close()
     except Exception as e:
         print(f"✗ Database connection failed: {e}")
 

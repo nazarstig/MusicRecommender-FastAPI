@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends
+from app.core.dependancies import get_recommendation_service
 from app.schemas.artist import ArtistResponse
 from app.schemas.recommendation import PlaylistRequest
 from app.schemas.song import SongResponse
@@ -11,7 +12,6 @@ from sqlalchemy.orm import Session
 from typing import List
 
 router = APIRouter()
-recommendationService = RecommendationService()
 
 @router.get("/artists", response_model=List[ArtistResponse])
 async def get_artists(artistName: str, db: Session = Depends(get_db)):
@@ -28,8 +28,12 @@ async def get_artist_songs(artistId: str, db: Session = Depends(get_db)):
     return songs
 
 @router.get("/recommendations/{user_id}", response_model=List[SongWithArtistResponse])
-async def get_recommendations_for_user(user_id: str, db: Session = Depends(get_db)):
-    recommendations = recommendationService.get_recommended_songs_for_user(db, user_id, 20)    
+async def get_recommendations_for_user(
+    user_id: str,
+    db: Session = Depends(get_db),
+    recommendation_service: RecommendationService = Depends(get_recommendation_service),
+):
+    recommendations = recommendation_service.get_recommended_songs_for_user(db, user_id, 20)
     track_ids = [rec["TrackId"] for rec in recommendations]
     
     songs_with_artists = (
@@ -55,10 +59,11 @@ async def get_recommendations_for_user(user_id: str, db: Session = Depends(get_d
     ]
 
 @router.get("/createrecommendations", response_model=None)
-async def create_recommendations(db: Session = Depends(get_db)):
-    ratings = RecommendationService.get_ratings(db)
-    recommendationService.create_recommendations(ratings)
-    
+async def create_recommendations(
+    db: Session = Depends(get_db),
+    recommendation_service: RecommendationService = Depends(get_recommendation_service),
+):
+    recommendation_service.create_recommendations(db)
     return None
 
 @router.post(
@@ -66,9 +71,13 @@ async def create_recommendations(db: Session = Depends(get_db)):
     response_model=List[SongWithArtistResponse],
     responses={400: {"description": "Invalid recommendation input"}}
 )
-async def get_recommendations_for_tracks(payload: PlaylistRequest, db: Session = Depends(get_db)):
+async def get_recommendations_for_tracks(
+    payload: PlaylistRequest,
+    db: Session = Depends(get_db),
+    recommendation_service: RecommendationService = Depends(get_recommendation_service),
+):
     try:
-        recommendations = recommendationService.get_recommended_songs_from_input(db, payload.track_ids, 10)
+        recommendations = recommendation_service.get_recommended_songs_from_input(payload.track_ids, 10)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
 
