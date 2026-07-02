@@ -12,9 +12,9 @@ class PlaylistRequest(BaseModel):
         ..., 
         validation_alias=AliasChoices("trackIds", "track_ids"),
         serialization_alias="trackIds",
-        min_length=5, 
-        max_length=10,
-        description="Between 5 and 10 track IDs from the user's playlist"
+        min_length=2, 
+        max_length=15,
+        description="Between 2 and 15 track IDs from the user's playlist"
     )
 
 
