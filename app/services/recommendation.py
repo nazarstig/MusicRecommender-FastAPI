@@ -1,16 +1,24 @@
+import os
+from typing import List, Dict, Tuple, Optional
+
+from fastapi.params import Depends
+from app.core.database import get_db
+
 import numpy as np
 import pandas as pd
 from sqlalchemy.orm import Session
 from app.models.rating import Rating
-from typing import List, Dict, Tuple
 from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import svds
 
 class RecommendationService:
     def __init__(self):
         self.predictions_df = None
-        self.V = None
+        self.U = None
+        self.V_T = None
         self.Sigma = None
+
+        self.recommendations_filepath = "recommendations_manual.npz"
     
     def get_ratings(self, db: Session) -> List[Rating]:
         ratings = db.query(Rating).all()
@@ -26,20 +34,74 @@ class RecommendationService:
         return matrix
     
     def create_recommendations(self, db: Session):
+        #self.load_prediction_matrices(self.recommendations_filepath)
+        
+        # Stop if predictions are already defined
+        if self.predictions_df is not None:
+            return self.predictions_df.head()
+        
         user_item_matrix = self.create_user_item_matrix(db)
         sparse_matrix = csr_matrix(user_item_matrix.values)
         u, s, vt = svds(sparse_matrix, k=200)
         sigma = np.diag(s)
 
-        self.V = vt.T
+        self.U = u
+        self.V_T = vt
         self.Sigma = sigma
 
         all_user_predicted_ratings = np.dot(np.dot(u, sigma), vt)
         self.predictions_df = pd.DataFrame(all_user_predicted_ratings, 
                               columns=user_item_matrix.columns, 
                               index=user_item_matrix.index)
-                
+        
+        self.persist_predictions(self.recommendations_filepath)        
         return self.predictions_df.head()
+
+    def persist_predictions(
+        self,
+        output_path: Optional[str] = None,
+    ) -> str:
+        if self.predictions_df is None:
+            raise ValueError("Predictions not created yet. Call create_recommendations() first.")
+
+        if output_path is None:
+            output_path = os.path.join(os.getcwd(), "recommendations_matrices.npz")
+
+        np.savez(
+            output_path,
+            U=self.U,
+            V_T=self.V_T,
+            Sigma=self.Sigma,
+        )
+
+        return output_path
+
+    def load_prediction_matrices(
+        self,
+        file_path: Optional[str] = None,
+        db: Session = None
+    ) -> str:
+        if self.predictions_df is not None:
+            return
+        if file_path is None:
+            raise ValueError("File path is not provided")
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Prediction matrices file not found: {file_path}")
+
+        user_item_matrix = self.create_user_item_matrix(db)
+        matrices = np.load(file_path)
+        if matrices is None or not all(key in matrices for key in ["V_T", "Sigma", "U"]):
+            return
+            raise ValueError(f"Prediction matrices file is missing required keys: {file_path}")
+
+        self.U = matrices["U"]
+        self.V_T = matrices["V_T"]
+        self.Sigma = matrices["Sigma"]
+
+        all_user_predicted_ratings = np.dot(np.dot(self.U, self.Sigma), self.V_T)
+        self.predictions_df = pd.DataFrame(all_user_predicted_ratings, 
+                                      columns=user_item_matrix.columns, 
+                                      index=user_item_matrix.index)
 
     def _power_method(
         self,
@@ -138,7 +200,7 @@ class RecommendationService:
         u, s, vt = self._manual_svds(dense_matrix, k=k)
         sigma = np.diag(s)
 
-        self.V = vt.T
+        self.V_T = vt
         self.Sigma = sigma
 
         all_user_predicted_ratings = np.dot(np.dot(u, sigma), vt)
@@ -173,8 +235,8 @@ class RecommendationService:
         for song in valid_input_songs:
             r_new[self.predictions_df.columns.get_loc(song)] = 50.0
         r_new = r_new.reshape(1, -1)
-        u_new = np.dot(r_new, np.dot(self.V, np.linalg.inv(self.Sigma)))
-        r = np.dot(u_new, np.dot(self.Sigma, self.V.T))
+        u_new = np.dot(r_new, np.dot(self.V_T.T, np.linalg.inv(self.Sigma)))
+        r = np.dot(u_new, np.dot(self.Sigma, self.V_T))
         song_scores = pd.Series(r.flatten(), index=self.predictions_df.columns).sort_values(ascending=False)
         recommendations = [song for song in song_scores.index if song not in input_songs]
         
