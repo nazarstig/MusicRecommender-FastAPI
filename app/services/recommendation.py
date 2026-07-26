@@ -1,8 +1,11 @@
 import os
 from typing import List, Dict, Tuple, Optional
 
+import boto3
+import botocore.exceptions
 from fastapi.params import Depends
-from app.core.database import get_db
+from app.core.config import settings
+import io
 
 import numpy as np
 import pandas as pd
@@ -19,6 +22,15 @@ class RecommendationService:
         self.Sigma = None
 
         self.recommendations_filepath = "recommendations_manual.npz"
+        self.s3_client = boto3.client(
+                        "s3",
+                        endpoint_url="http://localhost:9000",  # Адреса MinIO
+                        aws_access_key_id="minioadmin",
+                        aws_secret_access_key="minioadmin"
+                        #region_name="us-east-1",
+                    )
+        self.s3_bucket_name = "recommender-matrices"
+        self.s3_key = "models/latest/recommendations_matrices.npz"
     
     def get_ratings(self, db: Session) -> List[Rating]:
         ratings = db.query(Rating).all()
@@ -49,14 +61,21 @@ class RecommendationService:
         self.V_T = vt
         self.Sigma = sigma
 
+        self.create_predictions_df(u, sigma, vt, user_item_matrix)
+        # all_user_predicted_ratings = np.dot(np.dot(u, sigma), vt)
+        # self.predictions_df = pd.DataFrame(all_user_predicted_ratings, 
+        #                       columns=user_item_matrix.columns, 
+        #                       index=user_item_matrix.index)
+        
+        #self.persist_predictions(self.recommendations_filepath)
+        self.save_matrices_to_s3()
+        return self.predictions_df.head()
+    
+    def create_predictions_df(self, u, sigma, vt, user_item_matrix):
         all_user_predicted_ratings = np.dot(np.dot(u, sigma), vt)
         self.predictions_df = pd.DataFrame(all_user_predicted_ratings, 
-                              columns=user_item_matrix.columns, 
-                              index=user_item_matrix.index)
-        
-        self.persist_predictions(self.recommendations_filepath)        
-        return self.predictions_df.head()
-
+                                    columns=user_item_matrix.columns, 
+                                    index=user_item_matrix.index)
     def persist_predictions(
         self,
         output_path: Optional[str] = None,
@@ -75,6 +94,107 @@ class RecommendationService:
         )
 
         return output_path
+    
+    def s3_matrices_exists(self) -> bool:
+        try:
+            self.s3_client.head_object(Bucket=self.s3_bucket_name, Key=self.s3_key)
+            return True
+        except botocore.exceptions.ClientError as e:
+            return False
+
+    def save_matrices_to_s3(
+        self,
+        bucket_name: str = "recommender-matrices",
+        s3_key: str = "models/latest/recommendations_matrices.npz",
+        s3_client=None,
+    ):
+        if self.predictions_df is None:
+            raise ValueError(
+                "Predictions not created yet. Call create_recommendations() first."
+            )
+
+        # 1. Ініціалізуємо S3 клієнт, якщо його не передали
+        if s3_client is None:
+            s3_client = boto3.client(
+                "s3",
+                endpoint_url="http://localhost:9000",  # Адреса MinIO
+                aws_access_key_id="minioadmin",
+                aws_secret_access_key="minioadmin"
+                #region_name="us-east-1",
+            )
+
+        # 2. Перевіряємо/створюємо бакет
+        existing_buckets = [
+            b["Name"] for b in s3_client.list_buckets().get("Buckets", [])
+        ]
+        if bucket_name not in existing_buckets:
+            s3_client.create_bucket(Bucket=bucket_name)
+
+        # 3. Заковуємо матриці в буфер в ОЗП (In-Memory)
+        buffer = io.BytesIO()
+        np.savez_compressed(
+            buffer,
+            U=self.U,
+            V_T=self.V_T,
+            Sigma=self.Sigma,
+        )
+        buffer.seek(0)
+
+        # 4. Відправляємо в S3
+        s3_client.put_object(
+            Bucket=bucket_name,
+            Key=s3_key,
+            Body=buffer.getvalue(),
+        )
+
+    def load_matrices_from_s3(
+        self,
+        db: Session = None,
+        bucket_name: str = "recommender-matrices",
+        s3_key: str = "models/latest/recommendations_matrices.npz",
+        s3_client=None,
+    ):
+        # 1. Ініціалізуємо S3 клієнт, якщо його не передали
+        if s3_client is None:
+            s3_client = boto3.client(
+                "s3",
+                endpoint_url="http://localhost:9000",  # Адреса MinIO
+                aws_access_key_id="minioadmin",
+                aws_secret_access_key="minioadmin",
+                region_name="us-east-1",
+            )
+
+        try:
+            # 2. Отримуємо об'єкт із S3/MinIO
+            response = s3_client.get_object(Bucket=bucket_name, Key=s3_key)
+            file_bytes = response["Body"].read()
+
+            # 3. Зчитуємо npz-матриці напряму з байтового буфера в ОЗП
+            with np.load(io.BytesIO(file_bytes)) as matrices:
+                required_keys = ["V_T", "Sigma", "U"]
+
+                if not all(key in matrices for key in required_keys):
+                    raise ValueError(
+                        f"S3 file 's3://{bucket_name}/{s3_key}' is missing required keys: {required_keys}"
+                    )
+
+                # 4. Присвоюємо матриці полям класу
+                self.U = matrices["U"]
+                self.V_T = matrices["V_T"]
+                self.Sigma = matrices["Sigma"]
+
+            user_item_matrix = self.create_user_item_matrix(db)
+            self.create_predictions_df(self.U, self.Sigma, self.V_T, user_item_matrix)
+            print(
+                f"✓ Матриці U, V_T, Sigma успішно завантажено з S3: s3://{bucket_name}/{s3_key}"
+            )
+
+        except s3_client.exceptions.NoSuchKey:
+            raise FileNotFoundError(
+                f"Файл не знайдено в S3 за шляхом: s3://{bucket_name}/{s3_key}"
+            )
+        except Exception as e:
+            raise RuntimeError(f"Помилка завантаження матриць з S3: {str(e)}")
 
     def load_prediction_matrices(
         self,
@@ -98,10 +218,11 @@ class RecommendationService:
         self.V_T = matrices["V_T"]
         self.Sigma = matrices["Sigma"]
 
-        all_user_predicted_ratings = np.dot(np.dot(self.U, self.Sigma), self.V_T)
-        self.predictions_df = pd.DataFrame(all_user_predicted_ratings, 
-                                      columns=user_item_matrix.columns, 
-                                      index=user_item_matrix.index)
+        self.create_predictions_df(self.U, self.Sigma, self.V_T, user_item_matrix)
+        # all_user_predicted_ratings = np.dot(np.dot(self.U, self.Sigma), self.V_T)
+        # self.predictions_df = pd.DataFrame(all_user_predicted_ratings, 
+        #                               columns=user_item_matrix.columns, 
+        #                               index=user_item_matrix.index)
 
     def _power_method(
         self,

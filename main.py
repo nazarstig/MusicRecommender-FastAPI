@@ -40,10 +40,11 @@ async def startup_event():
         try:
             recommendation_service = get_recommendation_service()
             filepath = "recommendations_manual.npz"
-            if not os.path.exists(filepath):
+            if not recommendation_service.s3_matrices_exists():
                 recommendation_service.create_recommendations(db)
             else:
-                recommendation_service.load_prediction_matrices(filepath, db)
+                recommendation_service.load_matrices_from_s3(db)
+                #recommendation_service.load_prediction_matrices(filepath, db)
             print("✓ Recommendation matrices initialized")
         finally:
             db.close()
