@@ -7,7 +7,7 @@ from app.schemas.song_with_artist import SongWithArtistResponse
 from app.models.artist import Artist
 from app.models.song import Song
 from app.core.database import get_db
-from app.services.recommendation import RecommendationService
+from app.services.recommendation_service import RecommendationService
 from sqlalchemy.orm import Session
 from typing import List
 

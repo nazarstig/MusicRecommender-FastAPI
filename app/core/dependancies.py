@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from app.services.recommendation import RecommendationService
+from app.services.recommendation_service import RecommendationService
 
 
 @lru_cache

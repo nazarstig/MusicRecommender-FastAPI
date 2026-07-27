@@ -1,5 +1,3 @@
-import os
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api import routes
@@ -39,12 +37,7 @@ async def startup_event():
         db = SessionLocal()
         try:
             recommendation_service = get_recommendation_service()
-            filepath = "recommendations_manual.npz"
-            if not recommendation_service.s3_matrices_exists():
-                recommendation_service.create_recommendations(db)
-            else:
-                recommendation_service.load_matrices_from_s3(db)
-                #recommendation_service.load_prediction_matrices(filepath, db)
+            recommendation_service.create_recommendations(db)
             print("✓ Recommendation matrices initialized")
         finally:
             db.close()
