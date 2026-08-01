@@ -42,10 +42,10 @@ class RecommendationService:
         self.create_predictions_df(self.U, self.Sigma, self.V_T, user_item_matrix)
     
     def count_recommendation_matrices(self, user_item_matrix: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        sparse_matrix = csr_matrix(user_item_matrix.values)
+        sparse_matrix = csr_matrix(user_item_matrix.values.astype(np.float32))
         u, s, vt = svds(sparse_matrix, k=200)
-        sigma = np.diag(s)
-        return u, vt, sigma
+        sigma = np.diag(s.astype(np.float32))
+        return u.astype(np.float32), vt.astype(np.float32), sigma
         
     def create_predictions_df(self, u, sigma, vt, user_item_matrix):
         all_user_predicted_ratings = np.dot(np.dot(u, sigma), vt)
@@ -74,7 +74,7 @@ class RecommendationService:
          
         r_new = np.zeros(self.predictions_df.shape[1])
         for song in valid_input_songs:
-            r_new[self.predictions_df.columns.get_loc(song)] = 50.0
+            r_new[self.predictions_df.columns.get_loc(song)] = 5.0
         r_new = r_new.reshape(1, -1)
         u_new = np.dot(r_new, np.dot(self.V_T.T, np.linalg.inv(self.Sigma)))
         r = np.dot(u_new, np.dot(self.Sigma, self.V_T))
