@@ -42,7 +42,6 @@ class RecommendationService:
         self.create_predictions_df(self.U, self.Sigma, self.V_T, user_item_matrix)
     
     def count_recommendation_matrices(self, user_item_matrix: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        user_item_matrix = self.create_user_item_matrix(db)
         sparse_matrix = csr_matrix(user_item_matrix.values)
         u, s, vt = svds(sparse_matrix, k=200)
         sigma = np.diag(s)

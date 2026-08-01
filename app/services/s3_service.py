@@ -30,12 +30,18 @@ class S3Service:
         except botocore.exceptions.ClientError:
             return False
 
+    def create_matrices_bucket(self):
+        self.s3_client.create_bucket(Bucket=self.s3_bucket_name)
+
     def save_matrices(
         self,
         U,
         V_T,
         Sigma
     ):
+        if (not self.matrices_bucket_exists()):
+            self.create_matrices_bucket()
+        
         buffer = io.BytesIO()
         np.savez_compressed(
             buffer,
