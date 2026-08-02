@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     BACKEND_CORS_ORIGINS: list = ["*"]
     
     # Database Configuration
-    DB_SERVER: str = r"(localdb)\MSSQLLocalDB"
+    DB_SERVER: str = "DESKTOP-8OOAIKI"
     DB_NAME: str = "LastFmDb"
     DB_DRIVER: str = "ODBC Driver 17 for SQL Server"
 
