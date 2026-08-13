@@ -1,6 +1,7 @@
 from typing import List, Dict, Tuple, Optional
 import numpy as np
 import pandas as pd
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app.models.rating import Rating
 from scipy.sparse import csr_matrix
@@ -17,7 +18,18 @@ class RecommendationService:
         self.s3_service = S3Service()
     
     def get_ratings(self, db: Session) -> List[Rating]:
-        ratings = db.query(Rating).all()
+        active_tracks_subquery = (
+            db.query(Rating.TrackId)
+            .group_by(Rating.TrackId)
+            .having(func.sum(Rating.Rating) > 5)
+            .subquery()
+        )
+
+        ratings = (
+            db.query(Rating)
+            .join(active_tracks_subquery, Rating.TrackId == active_tracks_subquery.c.TrackId)
+            .all()
+        )
         return ratings
     
     def create_user_item_matrix(self, db: Session) -> pd.DataFrame:
