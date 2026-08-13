@@ -1,0 +1,39 @@
+services:
+  api:
+    build: .
+    container_name: musicrecommender_api
+    environment:
+      - DB_SERVER=${DB_SERVER}
+      - DB_PORT=${DB_PORT}
+      - DB_NAME=${DB_NAME}
+      - DB_DRIVER=${DB_DRIVER}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - API_V1_STR=${API_V1_STR}
+      # Use host.docker.internal so the container can reach MinIO running on the host
+      - AWS_S3_ENDPOINT_URL=http://host.docker.internal:9000
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+      - AWS_S3_BUCKET=recommender-matrices
+      - AWS_S3_PREFIX=recommendations
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./:/app
+    # Temporarily disabled restart policy to let the container stop on failure
+    # restart: unless-stopped
+  # `ui` service removed per request
+  angular:
+    image: node:18-alpine
+    container_name: musicrecommender_angular
+    working_dir: /app
+    volumes:
+      - ../MusicRecommender-UI:/app:rw
+    ports:
+      - "4200:4200"
+    # Skip `npm ci` here because the host already has `node_modules` and a full reinstall can hang.
+    command: sh -c "npm run start -- --host 0.0.0.0 --port 4200"
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+    depends_on:
+      - api
