@@ -8,8 +8,11 @@ rank, so the comparison is apples-to-apples), trains the SVD at each of
 --svd-ranks on the remaining ("train") ratings, and scores each model's
 top-k recommendations against the held-out ("test") tracks with NDCG@k.
 
-Results are printed to stdout and appended as a CSV row under eval_results/,
-so a run can be compared against earlier ones later.
+Each candidate rank is logged as its own MLflow run (nested under one parent
+run for the whole search) - params (svd_rank, test_fraction, ...) and metrics
+(ndcg_at_<k>, users_evaluated, ...). See MLFLOW_TRACKING_URI in
+app/core/config.py for where results end up; build_recommendation_matrices.py
+(once migrated) reads the best run from there to pick its SVD rank.
 
 Standalone: not part of the API, not run on a schedule. Run manually against
 the configured DB whenever you want to sanity-check ranking quality or pick
@@ -20,29 +23,35 @@ Usage:
     python evaluate_recommendations.py --svd-ranks 50,100,200 --ndcg-k 10 --test-fraction 0.2 --min-ratings 5 --seed 42
 """
 import argparse
-import csv
-import io
-import json
 import os
+import sys
 from datetime import datetime
 from typing import Dict, List, Optional
 
+# Must happen before anything touches stdout (mlflow's own run-finished message
+# includes an emoji that crashes on Windows' default cp1252 console encoding,
+# which - worse - leaves the run stuck in RUNNING status instead of FINISHED).
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+import mlflow
 import numpy as np
 import pandas as pd
 
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.services.recommendation_service import RecommendationService
-from app.services.s3_service import S3Service
 
 DEFAULT_SVD_RANKS = [50, 100, 200]
-RESULTS_DIR = "eval_results"
-BEST_POINTER_FILENAME = "best_svd_rank.json"
-RESULTS_FIELDNAMES = [
-    "requested_svd_rank", "svd_rank_used", "mean_ndcg", "median_ndcg", "min_ndcg", "max_ndcg",
-    "users_evaluated", "skipped_no_row", "skipped_no_overlap",
-    "train_users", "train_tracks", "ndcg_k", "test_fraction", "min_ratings", "seed",
-]
+
+# mlflow's S3 artifact repo talks to S3/MinIO directly (not proxied through the
+# tracking server), so it needs these as real env vars, same as the server itself.
+os.environ.setdefault("MLFLOW_S3_ENDPOINT_URL", settings.AWS_S3_ENDPOINT_URL or "")
+os.environ.setdefault("AWS_ACCESS_KEY_ID", settings.AWS_ACCESS_KEY_ID or "")
+os.environ.setdefault("AWS_SECRET_ACCESS_KEY", settings.AWS_SECRET_ACCESS_KEY or "")
+
+mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
+mlflow.set_experiment(settings.MLFLOW_EXPERIMENT_NAME)
 
 
 def split_train_test(ratings_df: pd.DataFrame, test_fraction: float, min_ratings: int, seed: int):
@@ -151,6 +160,24 @@ def evaluate_svd_rank(
     }
 
 
+def log_rank_result_to_mlflow(result: Dict, requested_rank: int, ndcg_k: int):
+    with mlflow.start_run(run_name=f"svd_rank_{requested_rank}", nested=True):
+        mlflow.log_param("svd_rank", result["svd_rank_used"])
+        mlflow.log_param("requested_svd_rank", requested_rank)
+
+        mlflow.log_metric("users_evaluated", result["users_evaluated"])
+        mlflow.log_metric("skipped_no_row", result["skipped_no_row"])
+        mlflow.log_metric("skipped_no_overlap", result["skipped_no_overlap"])
+
+        if result["mean_ndcg"] is not None:
+            mlflow.log_metric(f"ndcg_at_{ndcg_k}", result["mean_ndcg"])
+            mlflow.log_metric(f"ndcg_at_{ndcg_k}_median", result["median_ndcg"])
+            mlflow.log_metric(f"ndcg_at_{ndcg_k}_min", result["min_ndcg"])
+            mlflow.log_metric(f"ndcg_at_{ndcg_k}_max", result["max_ndcg"])
+        else:
+            mlflow.set_tag("no_users_evaluated", "true")
+
+
 def run_search(svd_ranks: List[int], ndcg_k: int, test_fraction: float, min_ratings: int, seed: int) -> List[Dict]:
     ratings_df, service = load_ratings()
     if ratings_df.empty:
@@ -173,6 +200,13 @@ def run_search(svd_ranks: List[int], ndcg_k: int, test_fraction: float, min_rati
 
     print(f"Train matrix: {train_matrix.shape[0]} users x {train_matrix.shape[1]} tracks")
 
+    mlflow.log_param("test_fraction", test_fraction)
+    mlflow.log_param("min_ratings", min_ratings)
+    mlflow.log_param("seed", seed)
+    mlflow.log_param("ndcg_k", ndcg_k)
+    mlflow.log_param("train_users", train_matrix.shape[0])
+    mlflow.log_param("train_tracks", train_matrix.shape[1])
+
     results = []
     seen_effective_ranks = set()
     for requested_rank in svd_ranks:
@@ -185,17 +219,8 @@ def run_search(svd_ranks: List[int], ndcg_k: int, test_fraction: float, min_rati
         result = evaluate_svd_rank(
             service, train_matrix, train_seen_by_user, test_relevance_by_user, requested_rank, ndcg_k
         )
-        result.update(
-            {
-                "train_users": train_matrix.shape[0],
-                "train_tracks": train_matrix.shape[1],
-                "ndcg_k": ndcg_k,
-                "test_fraction": test_fraction,
-                "min_ratings": min_ratings,
-                "seed": seed,
-            }
-        )
         results.append(result)
+        log_rank_result_to_mlflow(result, requested_rank, ndcg_k)
 
         if result["mean_ndcg"] is None:
             print(f"svd_rank={result['svd_rank_used']} (requested {requested_rank}): no users could be evaluated")
@@ -208,59 +233,6 @@ def run_search(svd_ranks: List[int], ndcg_k: int, test_fraction: float, min_rati
             )
 
     return results
-
-
-def build_results_csv_text(results: List[Dict]) -> str:
-    buffer = io.StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=RESULTS_FIELDNAMES)
-    writer.writeheader()
-    writer.writerows(results)
-    return buffer.getvalue()
-
-
-def write_results_csv_local(csv_text: str, timestamp: str) -> str:
-    os.makedirs(RESULTS_DIR, exist_ok=True)
-    path = os.path.join(RESULTS_DIR, f"k_search_{timestamp}.csv")
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        f.write(csv_text)
-    return path
-
-
-def upload_results_csv_to_s3(csv_text: str, timestamp: str) -> str:
-    s3_service = S3Service()
-    key = f"{settings.AWS_S3_EVAL_PREFIX}/k_search_{timestamp}.csv"
-    s3_service.upload_bytes(csv_text.encode("utf-8"), key)
-    return f"s3://{s3_service.s3_bucket_name}/{key}"
-
-
-def build_best_pointer_json(best: Dict, timestamp: str) -> str:
-    """The single 'current best' pointer build_recommendation_matrices.py reads to
-    pick its SVD rank. Overwritten every run - it's a pointer, not history."""
-    payload = {
-        "svd_rank": best["svd_rank_used"],
-        "requested_svd_rank": best["requested_svd_rank"],
-        "mean_ndcg": best["mean_ndcg"],
-        "ndcg_k": best["ndcg_k"],
-        "evaluated_at": timestamp,
-        "train_users": best["train_users"],
-        "train_tracks": best["train_tracks"],
-    }
-    return json.dumps(payload, indent=2)
-
-
-def write_best_pointer_local(pointer_json: str) -> str:
-    os.makedirs(RESULTS_DIR, exist_ok=True)
-    path = os.path.join(RESULTS_DIR, BEST_POINTER_FILENAME)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(pointer_json)
-    return path
-
-
-def upload_best_pointer_to_s3(pointer_json: str) -> str:
-    s3_service = S3Service()
-    key = f"{settings.AWS_S3_EVAL_PREFIX}/{BEST_POINTER_FILENAME}"
-    s3_service.upload_bytes(pointer_json.encode("utf-8"), key)
-    return f"s3://{s3_service.s3_bucket_name}/{key}"
 
 
 def parse_svd_ranks(value: str) -> List[int]:
@@ -288,40 +260,28 @@ def main():
     parser.add_argument("--seed", type=int, default=42, help="Random seed for the train/test split (default: 42)")
     args = parser.parse_args()
 
-    results = run_search(args.svd_ranks, args.ndcg_k, args.test_fraction, args.min_ratings, args.seed)
-
-    scored = [r for r in results if r["mean_ndcg"] is not None]
-    if not scored:
-        print("No candidate rank could be evaluated - try lowering --min-ratings.")
-        return
-
-    best = max(scored, key=lambda r: r["mean_ndcg"])
-    print(
-        f"\nBest: svd_rank={best['svd_rank_used']} (requested {best['requested_svd_rank']}) "
-        f"NDCG@{args.ndcg_k}={best['mean_ndcg']:.4f}"
-    )
-
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    csv_text = build_results_csv_text(results)
 
-    local_path = write_results_csv_local(csv_text, timestamp)
-    print(f"Results written to {local_path}")
+    with mlflow.start_run(run_name=f"svd_rank_search_{timestamp}") as parent_run:
+        results = run_search(args.svd_ranks, args.ndcg_k, args.test_fraction, args.min_ratings, args.seed)
 
-    try:
-        s3_uri = upload_results_csv_to_s3(csv_text, timestamp)
-        print(f"Results uploaded to {s3_uri}")
-    except Exception as e:
-        print(f"! Could not upload results to S3 ({e}) - local CSV above is still available.")
+        scored = [r for r in results if r["mean_ndcg"] is not None]
+        if not scored:
+            print("No candidate rank could be evaluated - try lowering --min-ratings.")
+            mlflow.set_tag("outcome", "no_scored_ranks")
+            return
 
-    pointer_json = build_best_pointer_json(best, timestamp)
-    local_pointer_path = write_best_pointer_local(pointer_json)
-    print(f"Best-rank pointer written to {local_pointer_path}")
+        best = max(scored, key=lambda r: r["mean_ndcg"])
+        print(
+            f"\nBest: svd_rank={best['svd_rank_used']} (requested {best['requested_svd_rank']}) "
+            f"NDCG@{args.ndcg_k}={best['mean_ndcg']:.4f}"
+        )
 
-    try:
-        pointer_uri = upload_best_pointer_to_s3(pointer_json)
-        print(f"Best-rank pointer uploaded to {pointer_uri} - build_recommendation_matrices.py will use it next run.")
-    except Exception as e:
-        print(f"! Could not upload best-rank pointer to S3 ({e}) - build_recommendation_matrices.py will keep using its previous/default rank.")
+        mlflow.log_param("best_svd_rank", best["svd_rank_used"])
+        mlflow.log_metric(f"best_ndcg_at_{args.ndcg_k}", best["mean_ndcg"])
+
+        run_url = f"{settings.MLFLOW_TRACKING_URI}/#/experiments/{parent_run.info.experiment_id}/runs/{parent_run.info.run_id}"
+        print(f"Logged to MLflow: {run_url}")
 
 
 if __name__ == "__main__":

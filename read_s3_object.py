@@ -15,22 +15,6 @@ import argparse
 from app.services.s3_service import S3Service
 
 
-def list_keys(prefix: str = ""):
-    s3 = S3Service()
-    paginator = s3.s3_client.get_paginator("list_objects_v2")
-    keys = []
-    for page in paginator.paginate(Bucket=s3.s3_bucket_name, Prefix=prefix):
-        for obj in page.get("Contents", []):
-            keys.append((obj["Key"], obj["Size"], obj["LastModified"]))
-    return keys
-
-
-def read_object(key: str) -> bytes:
-    s3 = S3Service()
-    response = s3.s3_client.get_object(Bucket=s3.s3_bucket_name, Key=key)
-    return response["Body"].read()
-
-
 def main():
     parser = argparse.ArgumentParser(description="Read or list objects in the project's S3/MinIO bucket.")
     parser.add_argument("key", nargs="?", help="Object key to read (omit when using --list)")
@@ -43,8 +27,10 @@ def main():
     )
     args = parser.parse_args()
 
+    s3 = S3Service()
+
     if args.list is not None:
-        keys = list_keys(args.list)
+        keys = s3.list_keys(args.list)
         if not keys:
             print("(no objects found)")
         for key, size, last_modified in keys:
@@ -54,7 +40,7 @@ def main():
     if not args.key:
         parser.error("provide a key to read, or use --list")
 
-    data = read_object(args.key)
+    data = s3.download_bytes(args.key)
 
     if args.out:
         with open(args.out, "wb") as f:

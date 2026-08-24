@@ -29,7 +29,11 @@ class Settings(BaseSettings):
     AWS_S3_ENDPOINT_URL: Optional[str] = "http://localhost:9000"
     AWS_ACCESS_KEY_ID: Optional[str] = "minioadmin"
     AWS_SECRET_ACCESS_KEY: Optional[str] = "minioadmin"
-    
+
+    MLFLOW_TRACKING_URI: str = "http://localhost:5000"
+    MLFLOW_EXPERIMENT_NAME: str = "music-recommender-svd"
+    MLFLOW_REGISTERED_MODEL_NAME: str = "music-recommender-svd"
+
     @property
     def DATABASE_URL(self) -> str:
         """Construct SQL Server connection string"""

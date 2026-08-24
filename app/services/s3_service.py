@@ -39,9 +39,13 @@ class S3Service:
         V_T,
         Sigma
     ):
-        if (not self.matrices_bucket_exists()):
+        self.save_matrices_to_key(U, V_T, Sigma, self.s3_key)
+
+    def save_matrices_to_key(self, U, V_T, Sigma, key: str):
+        """Same as save_matrices, but to an arbitrary key (e.g. a versioned path)."""
+        if not self.matrices_bucket_exists():
             self.create_matrices_bucket()
-        
+
         buffer = io.BytesIO()
         np.savez_compressed(
             buffer,
@@ -53,7 +57,7 @@ class S3Service:
 
         self.s3_client.put_object(
             Bucket=self.s3_bucket_name,
-            Key=self.s3_key,
+            Key=key,
             Body=buffer.getvalue(),
         )
 
@@ -78,6 +82,26 @@ class S3Service:
             Key=key,
             Body=data,
         )
+
+    def list_keys(self, prefix: str = ""):
+        """Returns [(key, size, last_modified), ...] for every object under prefix."""
+        paginator = self.s3_client.get_paginator("list_objects_v2")
+        keys = []
+        for page in paginator.paginate(Bucket=self.s3_bucket_name, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                keys.append((obj["Key"], obj["Size"], obj["LastModified"]))
+        return keys
+
+    def copy_object(self, source_key: str, dest_key: str):
+        """Server-side copy within the same bucket (no re-upload of the bytes)."""
+        self.s3_client.copy_object(
+            Bucket=self.s3_bucket_name,
+            CopySource={"Bucket": self.s3_bucket_name, "Key": source_key},
+            Key=dest_key,
+        )
+
+    def delete_object(self, key: str):
+        self.s3_client.delete_object(Bucket=self.s3_bucket_name, Key=key)
 
     def load_matrices(
         self

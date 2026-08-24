@@ -23,6 +23,22 @@ services:
     # Temporarily disabled restart policy to let the container stop on failure
     # restart: unless-stopped
   # `ui` service removed per request
+  mlflow:
+    image: python:3.12-slim
+    container_name: musicrecommender_mlflow
+    # Same "base image + command" pattern as the angular service below, instead of a
+    # dedicated Dockerfile - reinstalls mlflow/boto3 on every fresh container start.
+    command: sh -c "pip install --no-cache-dir mlflow boto3 && mlflow server --backend-store-uri sqlite:////mlflow/data/mlflow.db --default-artifact-root s3://recommender-matrices/mlflow-artifacts --host 0.0.0.0 --port 5000"
+    environment:
+      # Same MinIO bucket the API already uses (recommender-matrices), under its own
+      # mlflow-artifacts/ prefix - not a separate bucket.
+      - MLFLOW_S3_ENDPOINT_URL=http://host.docker.internal:9000
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_data:/mlflow/data
   angular:
     image: node:18-alpine
     container_name: musicrecommender_angular
@@ -37,3 +53,6 @@ services:
       - CHOKIDAR_USEPOLLING=true
     depends_on:
       - api
+
+volumes:
+  mlflow_data:
