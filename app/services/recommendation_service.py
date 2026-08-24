@@ -40,22 +40,23 @@ class RecommendationService:
         
         return matrix
     
-    def create_recommendations(self, db: Session):
-        if self.predictions_df is not None:
-            return 
-        
+    def create_recommendations(self, db: Session, force_reload: bool = False):
+        if self.predictions_df is not None and not force_reload:
+            return
+
+        if not self.s3_service.matrices_exist():
+            raise RuntimeError(
+                "No recommendation matrices found in S3. Run build_recommendation_matrices.py "
+                "to compute and upload them first."
+            )
+
         user_item_matrix = self.create_user_item_matrix(db)
-        if self.s3_service.matrices_exist():
-            self.U, self.V_T, self.Sigma = self.s3_service.load_matrices()
-        else:
-            self.U, self.V_T, self.Sigma = self.count_recommendation_matrices(user_item_matrix)
-            self.s3_service.save_matrices(self.U, self.V_T, self.Sigma)
-            
+        self.U, self.V_T, self.Sigma = self.s3_service.load_matrices()
         self.create_predictions_df(self.U, self.Sigma, self.V_T, user_item_matrix)
     
-    def count_recommendation_matrices(self, user_item_matrix: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def count_recommendation_matrices(self, user_item_matrix: pd.DataFrame, k: int = 200) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         sparse_matrix = csr_matrix(user_item_matrix.values.astype(np.float32))
-        u, s, vt = svds(sparse_matrix, k=200)
+        u, s, vt = svds(sparse_matrix, k=k)
         sigma = np.diag(s.astype(np.float32))
         return u.astype(np.float32), vt.astype(np.float32), sigma
         

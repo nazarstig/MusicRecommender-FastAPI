@@ -63,7 +63,8 @@ async def create_recommendations(
     db: Session = Depends(get_db),
     recommendation_service: RecommendationService = Depends(get_recommendation_service),
 ):
-    recommendation_service.create_recommendations(db)
+    """Force-reload matrices from S3, picking up whatever build_recommendation_matrices.py last uploaded."""
+    recommendation_service.create_recommendations(db, force_reload=True)
     return None
 
 @router.post(
