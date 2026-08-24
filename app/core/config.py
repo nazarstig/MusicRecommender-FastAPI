@@ -24,6 +24,7 @@ class Settings(BaseSettings):
 
     AWS_S3_BUCKET: Optional[str] = "recommender-matrices"
     AWS_S3_BUCKET_KEY: str = "models/latest/recommendations_matrices.npz"
+    AWS_S3_EVAL_PREFIX: str = "evaluations"
     AWS_S3_REGION: Optional[str] = None
     AWS_S3_ENDPOINT_URL: Optional[str] = "http://localhost:9000"
     AWS_ACCESS_KEY_ID: Optional[str] = "minioadmin"

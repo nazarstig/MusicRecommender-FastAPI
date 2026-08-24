@@ -57,6 +57,28 @@ class S3Service:
             Body=buffer.getvalue(),
         )
 
+    def object_exists(self, key: str) -> bool:
+        try:
+            self.s3_client.head_object(Bucket=self.s3_bucket_name, Key=key)
+            return True
+        except botocore.exceptions.ClientError:
+            return False
+
+    def download_bytes(self, key: str) -> bytes:
+        response = self.s3_client.get_object(Bucket=self.s3_bucket_name, Key=key)
+        return response["Body"].read()
+
+    def upload_bytes(self, data: bytes, key: str):
+        """Upload arbitrary bytes to the same bucket under a given key (e.g. evaluation results)."""
+        if not self.matrices_bucket_exists():
+            self.create_matrices_bucket()
+
+        self.s3_client.put_object(
+            Bucket=self.s3_bucket_name,
+            Key=key,
+            Body=data,
+        )
+
     def load_matrices(
         self
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

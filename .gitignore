@@ -32,6 +32,9 @@ htmlcov/
 # Logs
 *.log
 
+# Generated evaluation output (evaluate_recommendations.py)
+eval_results/
+
 # OS
 .DS_Store
 Thumbs.db
