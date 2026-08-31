@@ -10,8 +10,7 @@ services:
       - DB_USER=${DB_USER}
       - DB_PASSWORD=${DB_PASSWORD}
       - API_V1_STR=${API_V1_STR}
-      # Use host.docker.internal so the container can reach MinIO running on the host
-      - AWS_S3_ENDPOINT_URL=http://host.docker.internal:9000
+      - AWS_S3_ENDPOINT_URL=http://minio-s3:9000
       - AWS_ACCESS_KEY_ID=minioadmin
       - AWS_SECRET_ACCESS_KEY=minioadmin
       - AWS_S3_BUCKET=recommender-matrices
@@ -31,8 +30,8 @@ services:
     command: sh -c "pip install --no-cache-dir mlflow boto3 && mlflow server --backend-store-uri sqlite:////mlflow/data/mlflow.db --default-artifact-root s3://recommender-matrices/mlflow-artifacts --host 0.0.0.0 --port 5000"
     environment:
       # Same MinIO bucket the API already uses (recommender-matrices), under its own
-      # mlflow-artifacts/ prefix - not a separate bucket.
-      - MLFLOW_S3_ENDPOINT_URL=http://host.docker.internal:9000
+      # mlflow-artifacts/ prefix - not a separate bucket. Talk to it by container name over
+      - MLFLOW_S3_ENDPOINT_URL=http://minio-s3:9000
       - AWS_ACCESS_KEY_ID=minioadmin
       - AWS_SECRET_ACCESS_KEY=minioadmin
     ports:
